@@ -1,0 +1,169 @@
+--=============================================================
+--NOTES
+--7/26/2022	SGardner	Used Tom's code at lines 79-164 to run this query
+--7/26/2022	SGardner	Lines 86-120 produces outreach success numbers for 30 days and 
+--						appointment types specified in original query
+--7/26/2022	SGardner	Lines 129-165 produces outreach success numbers for 30 days and
+--						appointment types specified and adding CERT DIABETES EDUCATOR 30
+--						AND CERT DIABETES EDUCATOR 60
+
+--=============================================================
+--COUNT of patients where appointments were made between 2022-06-27 and 2022-07-27 (30 days)
+DROP TABLE IF EXISTS #appt_made
+SELECT DISTINCT COUNT(DISTINCT do.mrn) AS num_appt_diabetes
+	 INTO #appt_made
+	 FROM nch.temp_sg_diabetes_outreach_letters_07012022 AS do
+	INNER JOIN nch.IDENTITY_ID_VIEW_NCH AS iiv ON do.mrn = iiv.IDENTITY_ID
+	INNER JOIN epic.PAT_ENC_VIEW AS pev ON iiv.PAT_ID = pev.PAT_ID
+	INNER JOIN epic.CLARITY_PRC as cp ON pev.APPT_PRC_ID = cp.PRC_ID
+	INNER JOIN epic.CLARITY_DEP_VIEW AS cdv ON pev.DEPARTMENT_ID = cdv.DEPARTMENT_ID
+WHERE pev.APPT_MADE_DATE BETWEEN '2022-06-27' AND '2022-07-27'
+	AND cp.PRC_NAME IN ('OFFICE VISIT 15', 'OFFICE VISIT 30 MIN', 'OFFICE VISIT 60', 
+	'PHONE CONSULT', 'PHONE CONSULT LONG', 'NEW PATIENT 15 MIN', 
+	'NEW PATIENT 30 MIN', 'PHONE CONSULT - NEW PATIENT')
+	--AND cdv.SPECIALTY NOT LIKE '%dental%'
+ --   AND cdv.SPECIALTY NOT LIKE '%mental health%'
+	AND cdv.SPECIALTY LIKE '%medical%'
+
+--Count of Diabetes Outreach Letters sent to patients into a temp table
+DROP TABLE IF EXISTS #diabetes_outreach_letters_sent
+SELECT COUNT(DISTINCT do.mrn) AS diabetes_outreach_letters_sent
+INTO #diabetes_outreach_letters_sent
+FROM nch.temp_sg_diabetes_outreach_letters_07012022 AS do
+
+--=============================================================
+--Exploration Code
+--=============================================================
+SELECT iiv.IDENTITY_ID
+FROM nch.IDENTITY_ID_VIEW_NCH AS iiv
+GROUP BY IDENTITY_ID
+
+SELECT *
+FROM epic.CLARITY_PRC as cp
+INNER JOIN epic.PAT_ENC_VIEW as pev ON cp.PRC_ID = pev.APPT_PRC_ID
+
+--Collects all patients where appointments were made between 2022-06-27 and 2022-07-27 (30 days)
+SELECT DISTINCT do.mrn AS MRN
+	 , pev.PAT_ID
+	 , CONVERT(DATE, pev.APPT_MADE_DATE) AS appt_made_date
+	 , do.filesource AS outreach_reason
+	 , cp.PRC_NAME
+	 FROM nch.temp_sg_diabetes_outreach_letters_07012022 AS do
+	INNER JOIN nch.IDENTITY_ID_VIEW_NCH AS iiv ON do.mrn = iiv.IDENTITY_ID --cross references nch pt with outreach letters
+	INNER JOIN epic.PAT_ENC_VIEW AS pev ON iiv.PAT_ID = pev.PAT_ID --adds appt made date
+	INNER JOIN epic.CLARITY_PRC as cp ON pev.APPT_PRC_ID = cp.PRC_ID --adds visit type
+WHERE pev.APPT_MADE_DATE BETWEEN '2022-06-27' AND '2022-07-27' --looks for 30 days
+	AND (cp.PRC_NAME = 'OFFICE VISIT 15'
+	OR cp.PRC_NAME = 'OFFICE VISIT 30 MIN'
+	OR cp.PRC_NAME = 'OFFICE VISIT 60'
+	OR cp.PRC_NAME = 'PHONE CONSULT'
+	OR cp.PRC_NAME = 'PHONE CONSULT LONG'
+	OR cp.PRC_NAME = 'NEW PATIENT 15 MIN'
+	OR cp.PRC_NAME = 'NEW PATIENT 30 MIN'
+	OR cp.PRC_NAME = 'PHONE CONSULT - NEW PATIENT')
+ORDER BY appt_made_date, MRN DESC 
+
+--=============================================================
+--Code from Emily's tips
+--=============================================================
+DROP TABLE IF EXISTS #future_visits
+SELECT
+    do.mrn AS MRN
+    ,pev.APPT_MADE_DATE
+    ,cp.PRC_NAME
+INTO #future_visits
+FROM nch.temp_sg_diabetes_outreach_letters_07012022 AS do
+    INNER JOIN nch.IDENTITY_ID_VIEW_NCH AS iiv ON do.mrn = iiv.IDENTITY_ID
+    INNER JOIN epic.PAT_ENC_VIEW AS pev ON iiv.PAT_ID = pev.PAT_ID
+    INNER JOIN epic.CLARITY_PRC as cp ON pev.APPT_PRC_ID = cp.PRC_ID
+WHERE pev.APPT_MADE_DATE BETWEEN '2022-06-27' AND '2022-07-27'
+    AND cp.PRC_NAME IN ('OFFICE VISIT 15', 'OFFICE VISIT 30 MIN', 'OFFICE VISIT 60',
+    'PHONE CONSULT', 'PHONE CONSULT LONG', 'NEW PATIENT 15 MIN',
+    'NEW PATIENT 30 MIN', 'PHONE CONSULT - NEW PATIENT')
+
+--=============================================================
+--Code from Tom
+
+--Pull numbers for Diabetes outreach campaign, dates from 06/27/2022 - 07/27/2022, appointment types:
+--OFFICE VISIT 15, OFFICE VISIT 30 MIN, OFFICE VISIT 60, PHONE CONSULT, PHONE CONSULT LONG,
+--NEW PATIENT 15 MIN, NEW PATIENT 30 MIN, PHONE CONSULT - NEW PATIENT
+--=============================================================
+IF OBJECT_ID('tempdb..#ApptMade_Base') IS NOT NULL DROP TABLE #ApptMade_Base
+SELECT pev.PAT_ID, iiv.IDENTITY_ID
+INTO #ApptMade_Base
+FROM nch.IDENTITY_ID_VIEW_NCH AS iiv
+    INNER JOIN epic.PAT_ENC_VIEW AS pev ON iiv.PAT_ID = pev.PAT_ID --adds appt made date
+    INNER JOIN epic.CLARITY_PRC as cp ON pev.APPT_PRC_ID = cp.PRC_ID --adds visit type
+    INNER JOIN epic.CLARITY_DEP_VIEW AS cdv ON pev.DEPARTMENT_ID = cdv.DEPARTMENT_ID
+WHERE 1=1
+    AND pev.APPT_MADE_DATE BETWEEN '2022-06-27' AND '2022-07-27' --looks for 30 days
+    AND (cp.PRC_NAME = 'OFFICE VISIT 15'
+        OR cp.PRC_NAME = 'OFFICE VISIT 30 MIN'
+        OR cp.PRC_NAME = 'OFFICE VISIT 60'
+        OR cp.PRC_NAME = 'PHONE CONSULT'
+        OR cp.PRC_NAME = 'PHONE CONSULT LONG'
+        OR cp.PRC_NAME = 'NEW PATIENT 15 MIN'
+        OR cp.PRC_NAME = 'NEW PATIENT 30 MIN'
+        OR cp.PRC_NAME = 'PHONE CONSULT - NEW PATIENT')
+    AND cdv.SPECIALTY NOT LIKE '%dental%'
+    AND cdv.SPECIALTY NOT LIKE '%mental health%'
+	--AND cdv.SPECIALTY NOT LIKE '%specialist services%'
+GROUP BY pev.PAT_ID, iiv.IDENTITY_ID
+---
+IF OBJECT_ID('tempdb..#Base') IS NOT NULL DROP TABLE #Base
+SELECT do.mrn
+        , CASE WHEN amb.IDENTITY_ID IS NULL THEN 0 ELSE 1 END AS Outreach_Success
+        , 1 AS Denominator
+INTO #Base
+FROM nch.temp_sg_diabetes_outreach_letters_07012022 AS do
+        LEFT OUTER JOIN #ApptMade_Base AS amb ON do.mrn = amb.IDENTITY_ID
+--
+SELECT SUM(b.Denominator) AS Denom_Sum, SUM(b.Outreach_Success) AS Num_Sum
+FROM #Base AS b
+--
+DROP TABLE #ApptMade_Base
+DROP TABLE #Base
+--=======================================
+--Pull numbers for Diabetes outreach campaign, dates from 06/27/2022 - 07/27/2022, appointment types:
+--OFFICE VISIT 15, OFFICE VISIT 30 MIN, OFFICE VISIT 60, PHONE CONSULT, PHONE CONSULT LONG,
+--NEW PATIENT 15 MIN, NEW PATIENT 30 MIN, PHONE CONSULT - NEW PATIENT
+
+--Added CERT DIABETES EDUCATOR 30 AND 60
+--========================================
+IF OBJECT_ID('tempdb..#ApptMade_Base2') IS NOT NULL DROP TABLE #ApptMade_Base2
+SELECT pev.PAT_ID, iiv.IDENTITY_ID
+INTO #ApptMade_Base2
+FROM nch.IDENTITY_ID_VIEW_NCH AS iiv
+    INNER JOIN epic.PAT_ENC_VIEW AS pev ON iiv.PAT_ID = pev.PAT_ID --adds appt made date
+    INNER JOIN epic.CLARITY_PRC as cp ON pev.APPT_PRC_ID = cp.PRC_ID --adds visit type
+    INNER JOIN epic.CLARITY_DEP_VIEW AS cdv ON pev.DEPARTMENT_ID = cdv.DEPARTMENT_ID
+WHERE 1=1
+    AND pev.APPT_MADE_DATE BETWEEN '2022-06-27' AND '2022-07-27' --looks for 30 days
+    AND (cp.PRC_NAME = 'OFFICE VISIT 15'
+        OR cp.PRC_NAME = 'OFFICE VISIT 30 MIN'
+        OR cp.PRC_NAME = 'OFFICE VISIT 60'
+        OR cp.PRC_NAME = 'PHONE CONSULT'
+        OR cp.PRC_NAME = 'PHONE CONSULT LONG'
+        OR cp.PRC_NAME = 'NEW PATIENT 15 MIN'
+        OR cp.PRC_NAME = 'NEW PATIENT 30 MIN'
+        OR cp.PRC_NAME = 'PHONE CONSULT - NEW PATIENT'
+		OR cp.PRC_NAME = 'CERT DIABETES EDUCATOR 30'
+		OR cp.PRC_NAME = 'CERT DIABETES EDUCATOR 60')
+    AND cdv.SPECIALTY NOT LIKE '%dental%'
+    AND cdv.SPECIALTY NOT LIKE '%mental health%'
+	--AND cdv.SPECIALTY NOT LIKE '%specialist services%'
+GROUP BY pev.PAT_ID, iiv.IDENTITY_ID
+---
+IF OBJECT_ID('tempdb..#Base2') IS NOT NULL DROP TABLE #Base2
+SELECT do.mrn
+        , CASE WHEN amb.IDENTITY_ID IS NULL THEN 0 ELSE 1 END AS Outreach_Success
+        , 1 AS Denominator
+INTO #Base2
+FROM nch.temp_sg_diabetes_outreach_letters_07012022 AS do
+        LEFT OUTER JOIN #ApptMade_Base2 AS amb ON do.mrn = amb.IDENTITY_ID
+--
+SELECT SUM(b.Denominator) AS Denom_Sum, SUM(b.Outreach_Success) AS Num_Sum
+FROM #Base2 AS b
+--
+DROP TABLE #ApptMade_Base2
+DROP TABLE #Base2
