@@ -1,0 +1,130 @@
+--============================================================================
+--Combine MWOV letters outreach table with previous outreach letters to obtain DOB
+--============================================================================
+IF OBJECT_ID('tempbd..#final') IS NOT NULL DROP TABLE #final
+SELECT DISTINCT ol.policy_id
+	 , ol.first AS First_Name
+	 , ol.last AS Last_Name
+	 , mwov.[Patient DOB] AS DOB
+	 , ol.address AS Address_1
+INTO #final
+FROM nch.mwov_letters_outreach_2022_05_04 AS mwov
+	JOIN nch.temp_sg_mwov_outreach_letters_07122022 AS ol ON
+	mwov.[Policy ID] = ol.policy_id AND
+	mwov.[Patient First Name] = ol.first AND
+	mwov.[Patient Last Name] = ol.last
+--============================================================================
+--Prep Epic data
+--============================================================================
+IF OBJECT_ID('tempdb..#epic_simplifed_names') IS NOT NULL DROP TABLE #epic_simplifed_names
+SELECT	epic_first_name_original, epic_last_name_original
+		,REPLACE(
+			REPLACE(first_name_cleaned,'-','') -- remove hyphen character from names
+			,'''','' -- remove ' character from names
+		) AS first_name_cleaned
+		,REPLACE(
+			REPLACE(last_name_cleaned,'-','') -- remove hyphen character from names
+			,'''','' -- remove ' character from names
+		) AS last_name_cleaned
+		,BIRTH_DATE, MRN, PAT_ID
+INTO	#epic_simplifed_names
+FROM	(
+	SELECT	DISTINCT
+			pv.PAT_FIRST_NAME AS epic_first_name_original
+			,pv.PAT_LAST_NAME AS epic_last_name_original
+			,CASE WHEN PAT_FIRST_NAME LIKE '% II' THEN REPLACE(PAT_FIRST_NAME, ' II','') 
+				WHEN PAT_FIRST_NAME LIKE '% III' THEN REPLACE(PAT_FIRST_NAME, ' III','') 
+				WHEN PAT_FIRST_NAME LIKE '% IV' THEN REPLACE(PAT_FIRST_NAME, ' IV','') 
+				WHEN PAT_FIRST_NAME LIKE '% JR' THEN REPLACE(PAT_FIRST_NAME, ' JR','') 
+				WHEN PAT_FIRST_NAME LIKE '% SR' THEN REPLACE(PAT_FIRST_NAME, ' SR','') 
+				ELSE PAT_FIRST_NAME
+			END AS first_name_cleaned
+			,CASE WHEN PAT_LAST_NAME LIKE '% II' THEN REPLACE(PAT_LAST_NAME, ' II','') 
+				WHEN PAT_LAST_NAME LIKE '% III' THEN REPLACE(PAT_LAST_NAME, ' III','') 
+				WHEN PAT_LAST_NAME LIKE '% IV' THEN REPLACE(PAT_LAST_NAME, ' IV','') 
+				WHEN PAT_LAST_NAME LIKE '% JR' THEN REPLACE(PAT_LAST_NAME, ' JR','') 
+				WHEN PAT_LAST_NAME LIKE '% SR' THEN REPLACE(PAT_LAST_NAME, ' SR','') 
+				ELSE PAT_LAST_NAME
+			END AS last_name_cleaned
+			,CAST(pv.BIRTH_DATE AS DATE) AS BIRTH_DATE
+			,iivn.IDENTITY_ID AS MRN	
+			,iivn.PAT_ID
+	FROM	NCH_EDW.[nch].IDENTITY_ID_VIEW_NCH iivn 
+			INNER JOIN	NCH_EDW.epic.PATIENT_VIEW pv ON iivn.PAT_ID = pv.PAT_ID 
+) t
+--============================================================================
+--Data matching with combined table (#final) to find patients with MRNs
+--============================================================================
+IF OBJECT_ID('tempdb..#names_mapped') IS NOT NULL DROP TABLE #names_mapped
+SELECT	f.First_Name
+		,f.Last_Name
+		,f.DOB
+		,esn.MRN
+		,CONCAT(f.First_Name, f.Last_Name, f.DOB) AS name_dob
+INTO	#names_mapped
+FROM	#final AS f
+		LEFT JOIN #epic_simplifed_names esn ON 
+			f.First_Name = esn.first_name_cleaned AND 
+			f.Last_Name = esn.last_name_cleaned AND 
+			f.DOB = esn.BIRTH_DATE
+--============================================================================
+--SQL queries to find number of appointments made from outreach letters and success rate
+--============================================================================
+IF OBJECT_ID('tempbd..#apptmade') IS NOT NULL DROP TABLE #apptmade
+SELECT DISTINCT pev.PAT_ID, iiv.IDENTITY_ID
+INTO #apptmade
+FROM nch.IDENTITY_ID_VIEW_NCH AS iiv
+	INNER JOIN epic.PAT_ENC_VIEW AS pev ON iiv.PAT_ID = pev.PAT_ID --adds appt made date
+    INNER JOIN epic.CLARITY_PRC as cp ON pev.APPT_PRC_ID = cp.PRC_ID --adds visit type
+	INNER JOIN epic.CLARITY_DEP_VIEW AS cdv ON pev.DEPARTMENT_ID = cdv.DEPARTMENT_ID
+WHERE 1=1
+	AND pev.APPT_MADE_DATE BETWEEN '2022-05-20' AND '2022-06-18' --looks for 30 days
+    AND (cp.PRC_NAME = 'OFFICE VISIT 15'
+        OR cp.PRC_NAME = 'OFFICE VISIT 30 MIN'
+        OR cp.PRC_NAME = 'OFFICE VISIT 60'
+        OR cp.PRC_NAME = 'PHONE CONSULT'
+        OR cp.PRC_NAME = 'PHONE CONSULT LONG'
+        OR cp.PRC_NAME = 'NEW PATIENT 15 MIN'
+        OR cp.PRC_NAME = 'NEW PATIENT 30 MIN'
+        OR cp.PRC_NAME = 'PHONE CONSULT - NEW PATIENT'
+		OR cp.PRC_NAME = 'SAME DAY 30'
+		OR cp.PRC_NAME = 'SAME DAY LONG'
+		OR cp.PRC_NAME = 'WALK IN'
+		OR cp.PRC_NAME = 'WALK IN 15'
+		OR cp.PRC_NAME = 'WELL CHILD LONG'
+		OR cp.PRC_NAME = 'WELL CHILD CHECK')
+		AND cdv.SPECIALTY NOT LIKE '%dental%'
+		--AND cdv.SPECIALTY NOT LIKE '%specialist services%'
+GROUP BY pev.PAT_ID, iiv.IDENTITY_ID 
+--
+IF OBJECT_ID('tempdb..#Base') IS NOT NULL DROP TABLE #Base
+SELECT nm.MRN
+        , CASE WHEN am.IDENTITY_ID IS NULL THEN 0 ELSE 1 END AS Outreach_Success
+        , 1 AS Denominator
+INTO #Base
+FROM #names_mapped AS nm
+        LEFT OUTER JOIN #apptmade AS am ON nm.MRN = am.IDENTITY_ID
+--
+SELECT SUM(b.Denominator) AS Denom_Sum, SUM(b.Outreach_Success) AS Num_Sum
+FROM #Base AS b
+--
+DROP TABLE #final
+DROP TABLE #epic_simplifed_names
+DROP TABLE #names_mapped
+DROP TABLE #apptmade
+DROP TABLE #Base
+
+--===================================================
+-- Exploratory Queries
+--===================================================
+
+--Checks for duplicates
+--SELECT policy_id, [Policy ID], [Patient First Name], first, last, [Patient Last Name]
+--        ,COUNT(*)
+--FROM    #final
+--GROUP BY policy_id, [Policy ID], [Patient First Name], first, last, [Patient Last Name]
+--HAVING    COUNT(*) > 1
+----
+--SELECT DISTINCT *
+--FROM #final
+--WHERE #final.policy_id = '732627117'
